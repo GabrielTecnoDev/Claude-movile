@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Control remoto móvil</title>
+<style>
+:root{color-scheme:dark light;--bg:#111;--fg:#eee;--card:#1d1d1f;--ac:#4f8cff}
+@media(prefers-color-scheme:light){:root{--bg:#f4f4f6;--fg:#111;--card:#fff}}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px system-ui;display:flex;gap:16px;padding:16px;flex-wrap:wrap;justify-content:center}
+#screen{max-height:88vh;max-width:100%;border-radius:14px;background:#000;cursor:crosshair;touch-action:none;user-select:none;-webkit-user-drag:none}
+aside{background:var(--card);border-radius:14px;padding:14px;width:300px;max-width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:10px}
+button,input,select{font:inherit;padding:8px;border-radius:8px;border:1px solid #8884;background:transparent;color:inherit}
+button{cursor:pointer}button:hover{background:var(--ac);color:#fff}
+.row{display:flex;gap:6px;flex-wrap:wrap}.row>*{flex:1}
+#log{font-size:12px;opacity:.7;min-height:1.4em}small{opacity:.6}
+</style>
+<img id="screen" alt="pantalla del móvil">
+<aside>
+ <b id="info">Conectando…</b>
+ <div class="row"><button data-k="back">◀ Atrás</button><button data-k="home">● Inicio</button><button data-k="recents">▣ Recientes</button></div>
+ <div class="row"><button data-k="power">⏻</button><button data-k="volup">Vol+</button><button data-k="voldown">Vol−</button><button data-k="wake">Despertar</button></div>
+ <div class="row"><button data-k="prev">⏮</button><button data-k="playpause">⏯</button><button data-k="next">⏭</button></div>
+ <div class="row"><button id="up">↑ Scroll</button><button id="dn">↓ Scroll</button></div>
+ <div class="row"><input id="txt" placeholder="Escribir texto (ASCII)"><button id="send" style="flex:0">⏎</button></div>
+ <div class="row"><input id="url" placeholder="Abrir URL / vídeo"><button id="go" style="flex:0">Ir</button></div>
+ <div class="row"><select id="apps"><option value="">Apps instaladas…</option></select><button id="launch" style="flex:0">Abrir</button></div>
+ <div class="row"><button id="shot">📷 Captura</button><button id="rec">⏺ Grabar</button></div>
+ <div id="log"></div>
+ <small>Clic = tocar · arrastrar = deslizar · rueda = scroll · teclado con el foco en la pantalla escribe en el móvil.</small>
+</aside>
+<script>
+const T=new URLSearchParams(location.search).get('t')||'';
+const $=id=>document.getElementById(id), img=$('screen'), log=m=>$('log').textContent=m;
+img.src='/stream?t='+T;
+const api=async(p,b)=>{try{const r=await fetch('/api/'+p,{method:b?'POST':'GET',headers:{'X-Token':T},body:b?JSON.stringify(b):undefined});
+ const j=await r.json();if(j.error)throw Error(j.error);return j}catch(e){log('Error: '+e.message);throw e}};
+// coordenadas: la imagen puede venir reducida; el servidor trabaja en px reales, calculados con "wm size"
+let W=0,H=0;
+api('info').then(i=>{$('info').textContent=`${i.model} · Android ${i.android} · 🔋${i.battery}%`;
+ const m=i.size.match(/(\d+)x(\d+)/);if(m){W=+m[1];H=+m[2]}});
+const pt=e=>{const r=img.getBoundingClientRect();let x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;
+ const landscape=img.naturalWidth>img.naturalHeight, w=landscape?Math.max(W,H):Math.min(W,H), h=landscape?Math.min(W,H):Math.max(W,H);
+ return [x*w,y*h]};
+let d=null;
+img.onpointerdown=e=>{img.focus();d={p:pt(e),t:Date.now()};img.setPointerCapture(e.pointerId)};
+img.onpointerup=e=>{if(!d)return;const [x,y]=pt(e),[x0,y0]=d.p;
+ if(Math.hypot(x-x0,y-y0)<15)api('tap',{x:x0,y:y0});else api('swipe',{x1:x0,y1:y0,x2:x,y2:y,ms:Math.max(100,Date.now()-d.t)});d=null};
+img.onwheel=e=>{e.preventDefault();const [x,y]=pt(e);api('swipe',{x1:x,y1:y,x2:x,y2:y-Math.sign(e.deltaY)*H*.25,ms:250})};
+img.tabIndex=0;
+img.onkeydown=e=>{const m={Enter:'enter',Backspace:'del',ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right',Tab:'tab',Escape:'back'}[e.key];
+ if(m){e.preventDefault();api('key',{key:m})}else if(e.key.length===1&&!e.ctrlKey&&!e.metaKey){e.preventDefault();api('text',{text:e.key})}};
+document.querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>api('key',{key:b.dataset.k}));
+const sw=s=>api('swipe',{x1:W/2,y1:H*(s>0?.7:.3),x2:W/2,y2:H*(s>0?.3:.7),ms:300});
+$('up').onclick=()=>sw(-1);$('dn').onclick=()=>sw(1);
+$('send').onclick=()=>{api('text',{text:$('txt').value});$('txt').value=''};
+$('txt').onkeydown=e=>{if(e.key==='Enter')$('send').click()};
+$('go').onclick=()=>api('url',{url:$('url').value});
+api('apps').then(l=>l.forEach(p=>$('apps').add(new Option(p,p)))).catch(()=>{});
+$('launch').onclick=()=>$('apps').value&&api('launch',{package:$('apps').value});
+$('shot').onclick=()=>{location.href='/api/screenshot?t='+T;log('Captura guardada en captures/')};
+let rec=false;$('rec').onclick=async()=>{if(!rec){await api('rec/start',{});rec=true;$('rec').textContent='⏹ Parar';log('Grabando (máx. 3 min)…')}
+ else{log('Guardando…');const r=await api('rec/stop',{});rec=false;$('rec').textContent='⏺ Grabar';log('Guardado: captures/'+r.file);window.open('/captures/'+r.file+'?t='+T)}};
+</script>
